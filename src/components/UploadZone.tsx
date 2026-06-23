@@ -2,6 +2,53 @@ import React, { useRef, useState } from 'react';
 import { UploadCloud } from 'lucide-react';
 import { playUploadSound } from '../utils/audioEffects';
 
+// Helper to recursively traverse folders dropped into the dropzone
+const traverseFileTree = async (item: any): Promise<File[]> => {
+  return new Promise((resolve) => {
+    if (item.isFile) {
+      item.file(
+        (file: File) => {
+          if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
+            resolve([file]);
+          } else {
+            resolve([]);
+          }
+        },
+        () => resolve([])
+      );
+    } else if (item.isDirectory) {
+      const dirReader = item.createReader();
+      
+      const readEntriesBatch = (): Promise<any[]> => {
+        return new Promise((res) => {
+          dirReader.readEntries(
+            (entries: any[]) => res(entries),
+            () => res([])
+          );
+        });
+      };
+
+      const readAllEntries = async () => {
+        let allEntries: any[] = [];
+        let batch = await readEntriesBatch();
+        while (batch.length > 0) {
+          allEntries = allEntries.concat(batch);
+          batch = await readEntriesBatch();
+        }
+        return allEntries;
+      };
+
+      readAllEntries().then(async (entries) => {
+        const promises = entries.map(entry => traverseFileTree(entry));
+        const fileArrays = await Promise.all(promises);
+        resolve(fileArrays.flat());
+      });
+    } else {
+      resolve([]);
+    }
+  });
+};
+
 interface UploadZoneProps {
   onFilesSelected: (files: File[]) => void;
   onHoverSound?: () => void;
@@ -20,11 +67,34 @@ export const UploadZone: React.FC<UploadZoneProps> = ({ onFilesSelected, onHover
     setIsDragOver(false);
   };
 
-  const handleDrop = (e: React.DragEvent) => {
+  const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragOver(false);
-    
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+
+    if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
+      const entries: any[] = [];
+      for (let i = 0; i < e.dataTransfer.items.length; i++) {
+        const item = e.dataTransfer.items[i];
+        if (item.kind === 'file') {
+          const entry = item.webkitGetAsEntry();
+          if (entry) {
+            entries.push(entry);
+          }
+        }
+      }
+
+      if (entries.length > 0) {
+        const filesPromises = entries.map(entry => traverseFileTree(entry));
+        const filesArrays = await Promise.all(filesPromises);
+        const pdfFiles = filesArrays.flat();
+
+        if (pdfFiles.length > 0) {
+          playUploadSound();
+          onFilesSelected(pdfFiles);
+        }
+      }
+    } else if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      // Fallback for older browsers
       const files: File[] = [];
       for (let i = 0; i < e.dataTransfer.files.length; i++) {
         const file = e.dataTransfer.files[i];
