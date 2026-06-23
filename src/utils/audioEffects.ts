@@ -1,6 +1,7 @@
 let audioCtx: AudioContext | null = null;
 let isMuted = false;
 let processOscillator: OscillatorNode | null = null;
+let processOscillator2: OscillatorNode | null = null;
 let processGain: GainNode | null = null;
 
 function initAudio() {
@@ -19,14 +20,18 @@ export const setMuted = (muted: boolean) => {
     // Fade out processing loop if muted mid-process
     try {
       processGain.gain.setValueAtTime(processGain.gain.value, audioCtx?.currentTime || 0);
-      processGain.gain.exponentialRampToValueAtTime(0.0001, (audioCtx?.currentTime || 0) + 0.2);
+      processGain.gain.exponentialRampToValueAtTime(0.0001, (audioCtx?.currentTime || 0) + 0.3);
       setTimeout(() => {
         if (processOscillator) {
-          processOscillator.stop();
+          try { processOscillator.stop(); } catch(e){}
           processOscillator = null;
-          processGain = null;
         }
-      }, 200);
+        if (processOscillator2) {
+          try { processOscillator2.stop(); } catch(e){}
+          processOscillator2 = null;
+        }
+        processGain = null;
+      }, 310);
     } catch (e) {
       // Ignore audio errors
     }
@@ -118,37 +123,57 @@ export const playUploadSound = () => {
   }
 };
 
-// Processing Loop - Oscillating engine/scanner sound
+// Processing Loop - Soothing ambient meditation synthesizer pad
 export const playProcessLoop = () => {
   if (isMuted) return;
   try {
     const ctx = initAudio();
     if (processOscillator) return; // Already running
 
-    const osc = ctx.createOscillator();
+    const osc1 = ctx.createOscillator();
+    const osc2 = ctx.createOscillator();
+    const lfo1 = ctx.createOscillator();
+    const lfo2 = ctx.createOscillator();
+    const lfoGain1 = ctx.createGain();
+    const lfoGain2 = ctx.createGain();
     const gain = ctx.createGain();
-    const lfo = ctx.createOscillator();
-    const lfoGain = ctx.createGain();
 
-    osc.type = 'triangle';
-    osc.frequency.setValueAtTime(100, ctx.currentTime); // Low hum
+    // Warm, soothing dyad (A3 at 220Hz and E4 at 330Hz - perfect fifth chord)
+    osc1.type = 'sine';
+    osc1.frequency.setValueAtTime(220, ctx.currentTime);
+    
+    osc2.type = 'sine';
+    osc2.frequency.setValueAtTime(330, ctx.currentTime);
 
-    // Low Frequency Oscillator to modulate the frequency for "scanner" feel
-    lfo.frequency.setValueAtTime(3, ctx.currentTime); // 3Hz wobble
-    lfoGain.gain.setValueAtTime(12, ctx.currentTime); // wobble range +/-12Hz
+    // Subtle LFO drift to emulate moving analog pads
+    lfo1.frequency.setValueAtTime(0.08, ctx.currentTime); // 12-second cycle
+    lfoGain1.gain.setValueAtTime(1.5, ctx.currentTime); // +/- 1.5Hz drift
 
+    lfo2.frequency.setValueAtTime(0.06, ctx.currentTime); // 16-second cycle
+    lfoGain2.gain.setValueAtTime(2.0, ctx.currentTime); // +/- 2Hz drift
+
+    // Connect modulators to pitch
+    lfo1.connect(lfoGain1);
+    lfoGain1.connect(osc1.frequency);
+    
+    lfo2.connect(lfoGain2);
+    lfoGain2.connect(osc2.frequency);
+
+    // Set gentle, breathing sound volume
     gain.gain.setValueAtTime(0, ctx.currentTime);
-    gain.gain.linearRampToValueAtTime(0.06, ctx.currentTime + 0.2); // Smooth fade in
+    gain.gain.linearRampToValueAtTime(0.05, ctx.currentTime + 0.4); // 400ms soft fade-in
 
-    lfo.connect(lfoGain);
-    lfoGain.connect(osc.frequency);
-    osc.connect(gain);
+    osc1.connect(gain);
+    osc2.connect(gain);
     gain.connect(ctx.destination);
 
-    lfo.start();
-    osc.start();
+    lfo1.start();
+    lfo2.start();
+    osc1.start();
+    osc2.start();
 
-    processOscillator = osc;
+    processOscillator = osc1;
+    processOscillator2 = osc2;
     processGain = gain;
   } catch (e) {
     // Error starting loop
@@ -157,24 +182,29 @@ export const playProcessLoop = () => {
 
 // Stop Processing Loop
 export const stopProcessLoop = () => {
-  if (!processOscillator || !processGain) return;
+  if (!processGain) return;
   try {
     const ctx = initAudio();
     const now = ctx.currentTime;
     processGain.gain.setValueAtTime(processGain.gain.value, now);
-    processGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.15); // Fade out
+    processGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.3); // 300ms soft fade-out
     
-    const tempOsc = processOscillator;
+    const tempOsc1 = processOscillator;
+    const tempOsc2 = processOscillator2;
+    
     processOscillator = null;
+    processOscillator2 = null;
     processGain = null;
 
     setTimeout(() => {
       try {
-        tempOsc.stop();
+        tempOsc1?.stop();
+        tempOsc2?.stop();
       } catch (e) {}
-    }, 160);
+    }, 310);
   } catch (e) {
     processOscillator = null;
+    processOscillator2 = null;
     processGain = null;
   }
 };
