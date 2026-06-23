@@ -90,34 +90,51 @@ export const playReorderSound = () => {
   }
 };
 
-// Cybernetic arpeggio sweep on file upload
+// Cybernetic arpeggio sweep on file upload -> Soothing warm acoustic chime
 export const playUploadSound = () => {
   if (isMuted) return;
   try {
     const ctx = initAudio();
     const now = ctx.currentTime;
     
-    // Play 3 quick rising chime notes
-    const notes = [440, 660, 880];
-    notes.forEach((freq, idx) => {
-      const time = now + idx * 0.06;
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
+    const osc1 = ctx.createOscillator();
+    const osc2 = ctx.createOscillator();
+    const osc3 = ctx.createOscillator();
+    const gain = ctx.createGain();
 
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(freq, time);
-      osc.frequency.exponentialRampToValueAtTime(freq * 1.2, time + 0.08);
+    // Warm, soothing major dyad (C5 and E5) + soft E6 shimmer
+    osc1.type = 'sine';
+    osc1.frequency.setValueAtTime(523.25, now);
+    
+    osc2.type = 'sine';
+    osc2.frequency.setValueAtTime(659.25, now);
 
-      gain.gain.setValueAtTime(0, time);
-      gain.gain.linearRampToValueAtTime(0.04, time + 0.01);
-      gain.gain.exponentialRampToValueAtTime(0.0001, time + 0.12);
+    osc3.type = 'sine';
+    osc3.frequency.setValueAtTime(1318.51, now); // soft high octave helper
 
-      osc.connect(gain);
-      gain.connect(ctx.destination);
+    // Very gentle attack and slow decay envelope
+    gain.gain.setValueAtTime(0, now);
+    gain.gain.linearRampToValueAtTime(0.04, now + 0.08); // 80ms soft fade-in
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 1.2); // 1.2s long relaxing tail
 
-      osc.start(time);
-      osc.stop(time + 0.12);
-    });
+    osc1.connect(gain);
+    osc2.connect(gain);
+    
+    // Lower volume for shimmer
+    const shimmerGain = ctx.createGain();
+    shimmerGain.gain.setValueAtTime(0.12, now); // 12% of main volume
+    osc3.connect(shimmerGain);
+    shimmerGain.connect(gain);
+
+    gain.connect(ctx.destination);
+
+    osc1.start(now);
+    osc2.start(now);
+    osc3.start(now);
+
+    osc1.stop(now + 1.3);
+    osc2.stop(now + 1.3);
+    osc3.stop(now + 1.3);
   } catch (e) {
     // Audio context block
   }
