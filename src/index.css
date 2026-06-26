@@ -778,3 +778,47 @@ body {
   0% { transform: translateY(0); }
   100% { transform: translateY(-10px); }
 }
+
+/* Dual Mode Main Switcher */
+.mode-toggle-bar {
+  display: flex;
+  background: rgba(12, 15, 36, 0.55);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border-bottom: 1px solid rgba(0, 240, 255, 0.08);
+  padding: 0 2rem;
+  gap: 1.5rem;
+}
+
+.mode-toggle-btn-main {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-cyber);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  padding: 0.8rem 0.5rem;
+  cursor: pointer;
+  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  position: relative;
+}
+
+.mode-toggle-btn-main:hover {
+  color: var(--text-primary);
+  text-shadow: 0 0 8px rgba(255, 255, 255, 0.3);
+}
+
+.mode-toggle-btn-main.active {
+  color: var(--accent-cyan);
+  border-color: var(--accent-cyan);
+  text-shadow: 0 0 10px rgba(0, 240, 255, 0.4);
+}
+
+/* Modal and Element Fade animations */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+

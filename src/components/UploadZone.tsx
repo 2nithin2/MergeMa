@@ -3,12 +3,17 @@ import { UploadCloud } from 'lucide-react';
 import { playUploadSound } from '../utils/audioEffects';
 
 // Helper to recursively traverse folders dropped into the dropzone
-const traverseFileTree = async (item: any): Promise<File[]> => {
+const traverseFileTree = async (item: any, mode: 'pdf' | 'image'): Promise<File[]> => {
   return new Promise((resolve) => {
     if (item.isFile) {
       item.file(
         (file: File) => {
-          if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
+          const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+          const isImage = file.type.startsWith('image/') || /\.(jpe?g|png|webp|bmp|gif|tiff)$/i.test(file.name);
+          
+          if (mode === 'pdf' && isPdf) {
+            resolve([file]);
+          } else if (mode === 'image' && isImage) {
             resolve([file]);
           } else {
             resolve([]);
@@ -39,7 +44,7 @@ const traverseFileTree = async (item: any): Promise<File[]> => {
       };
 
       readAllEntries().then(async (entries) => {
-        const promises = entries.map(entry => traverseFileTree(entry));
+        const promises = entries.map(entry => traverseFileTree(entry, mode));
         const fileArrays = await Promise.all(promises);
         resolve(fileArrays.flat());
       });
@@ -52,9 +57,10 @@ const traverseFileTree = async (item: any): Promise<File[]> => {
 interface UploadZoneProps {
   onFilesSelected: (files: File[]) => void;
   onHoverSound?: () => void;
+  mode: 'pdf' | 'image';
 }
 
-export const UploadZone: React.FC<UploadZoneProps> = ({ onFilesSelected, onHoverSound }) => {
+export const UploadZone: React.FC<UploadZoneProps> = ({ onFilesSelected, onHoverSound, mode }) => {
   const [isDragOver, setIsDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -65,6 +71,15 @@ export const UploadZone: React.FC<UploadZoneProps> = ({ onFilesSelected, onHover
 
   const handleDragLeave = () => {
     setIsDragOver(false);
+  };
+
+  const isFileValid = (file: File): boolean => {
+    const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+    const isImage = file.type.startsWith('image/') || /\.(jpe?g|png|webp|bmp|gif|tiff)$/i.test(file.name);
+    
+    if (mode === 'pdf') return isPdf;
+    if (mode === 'image') return isImage;
+    return false;
   };
 
   const handleDrop = async (e: React.DragEvent) => {
@@ -84,21 +99,20 @@ export const UploadZone: React.FC<UploadZoneProps> = ({ onFilesSelected, onHover
       }
 
       if (entries.length > 0) {
-        const filesPromises = entries.map(entry => traverseFileTree(entry));
+        const filesPromises = entries.map(entry => traverseFileTree(entry, mode));
         const filesArrays = await Promise.all(filesPromises);
-        const pdfFiles = filesArrays.flat();
+        const filteredFiles = filesArrays.flat();
 
-        if (pdfFiles.length > 0) {
+        if (filteredFiles.length > 0) {
           playUploadSound();
-          onFilesSelected(pdfFiles);
+          onFilesSelected(filteredFiles);
         }
       }
     } else if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      // Fallback for older browsers
       const files: File[] = [];
       for (let i = 0; i < e.dataTransfer.files.length; i++) {
         const file = e.dataTransfer.files[i];
-        if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
+        if (isFileValid(file)) {
           files.push(file);
         }
       }
@@ -114,7 +128,7 @@ export const UploadZone: React.FC<UploadZoneProps> = ({ onFilesSelected, onHover
       const files: File[] = [];
       for (let i = 0; i < e.target.files.length; i++) {
         const file = e.target.files[i];
-        if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
+        if (isFileValid(file)) {
           files.push(file);
         }
       }
@@ -152,7 +166,7 @@ export const UploadZone: React.FC<UploadZoneProps> = ({ onFilesSelected, onHover
         type="file"
         ref={fileInputRef}
         onChange={handleFileChange}
-        accept=".pdf,application/pdf"
+        accept={mode === 'pdf' ? '.pdf,application/pdf' : 'image/*,.jpg,.jpeg,.png,.webp,.bmp,.gif,.tiff'}
         multiple
         style={{ display: 'none' }}
       />
@@ -167,13 +181,17 @@ export const UploadZone: React.FC<UploadZoneProps> = ({ onFilesSelected, onHover
           }} 
         />
         <h3 style={{ fontFamily: 'var(--font-cyber)', fontSize: '0.95rem', letterSpacing: '0.5px' }}>
-          LOAD DOCUMENTS
+          {mode === 'pdf' ? 'LOAD DOCUMENTS' : 'LOAD IMAGES'}
         </h3>
         <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-          Drag & Drop PDF files here, or tap to browse
+          {mode === 'pdf' 
+            ? 'Drag & Drop PDF files here, or tap to browse' 
+            : 'Drag & Drop image files (JPG, PNG, WEBP, etc.) here, or tap to browse'
+          }
         </p>
       </div>
     </div>
   );
 };
+
 export default UploadZone;

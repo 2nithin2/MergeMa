@@ -6,7 +6,13 @@ import ControlPanel from './components/ControlPanel';
 import StatusTerminal from './components/StatusTerminal';
 import PagePreviewModal from './components/PagePreviewModal';
 import { PdfPageInfo, extractPagesAsThumbnails, compilePdf } from './utils/pdfEngine';
-import { playHoverSound, playProcessLoop, stopProcessLoop, playCompletionSound, playErrorSound } from './utils/audioEffects';
+import { playHoverSound, playProcessLoop, stopProcessLoop, playCompletionSound, playErrorSound, playReorderSound } from './utils/audioEffects';
+
+// New Image Compressor components and utilities
+import ImageControlPanel, { CompressionSettings } from './components/ImageControlPanel';
+import ImageWorkspace, { ImageFileItem } from './components/ImageWorkspace';
+import ImagePreviewModal from './components/ImagePreviewModal';
+import { compressImage, convertImageToPdf } from './utils/imageCompressor';
 
 interface LoadedFile {
   uuid: string;
@@ -15,10 +21,24 @@ interface LoadedFile {
 }
 
 export const App: React.FC = () => {
+  // App mode: PDF processing or Image Compressor
+  const [mode, setMode] = useState<'pdf' | 'image'>('pdf');
+
+  // PDF state
   const [filesMap] = useState<Map<string, ArrayBuffer>>(() => new Map());
   const [files, setFiles] = useState<LoadedFile[]>([]);
   const [pages, setPages] = useState<PdfPageInfo[]>([]);
   
+  // Image compressor state
+  const [imageFiles, setImageFiles] = useState<ImageFileItem[]>([]);
+  const [previewImageUuid, setPreviewImageUuid] = useState<string | null>(null);
+  const [imageSettings, setImageSettings] = useState<CompressionSettings>({
+    format: 'jpeg',
+    targetSizeKb: 100,
+    maxWidth: 2048,
+    maxHeight: 2048
+  });
+
   // Compiler modal and logs state
   const [isCompiling, setIsCompiling] = useState(false);
   const [compileTitle, setCompileTitle] = useState('COMPILING SYSTEM MATRIX');
@@ -31,6 +51,15 @@ export const App: React.FC = () => {
   const triggerHoverSound = () => {
     playHoverSound();
   };
+
+  const handleModeChange = (newMode: 'pdf' | 'image') => {
+    playReorderSound();
+    setMode(newMode);
+  };
+
+  // ==========================================
+  // PDF PROCESSOR HANDLERS
+  // ==========================================
 
   // Files selected callback
   const handleFilesSelected = async (newFiles: File[]) => {
@@ -343,39 +372,383 @@ export const App: React.FC = () => {
     }
   };
 
+  // ==========================================
+  // IMAGE COMPRESSOR HANDLERS
+  // ==========================================
+
+  // Image files selected callback
+  const handleImageFilesSelected = async (newFiles: File[]) => {
+    setIsCompiling(true);
+    setCompileTitle('ANALYZING INCOMING SECTOR IMAGES');
+    setLogs(['> Initializing image buffer registry...', `> Processing ${newFiles.length} image(s)...`]);
+    playProcessLoop();
+
+    try {
+      const newImageItems: ImageFileItem[] = [];
+
+      for (const file of newFiles) {
+        setLogs(prev => [...prev, `> Reading image dimensions: ${file.name}...`]);
+        
+        const objectUrl = URL.createObjectURL(file);
+        
+        // Wait to load image to get width and height
+        const dimensions: { width: number; height: number } = await new Promise((resolve) => {
+          const img = new Image();
+          img.onload = () => resolve({ width: img.width, height: img.height });
+          img.onerror = () => resolve({ width: 0, height: 0 });
+          img.src = objectUrl;
+        });
+
+        newImageItems.push({
+          uuid: `image-${Math.random().toString(36).substr(2, 9)}`,
+          file,
+          name: file.name,
+          originalSize: file.size,
+          originalWidth: dimensions.width,
+          originalHeight: dimensions.height,
+          previewUrl: objectUrl,
+          compressionStatus: 'idle'
+        });
+      }
+
+      setImageFiles(prev => [...prev, ...newImageItems]);
+      setLogs(prev => [...prev, `✔ ${newImageItems.length} image files queued successfully.`]);
+      playCompletionSound();
+    } catch (error: any) {
+      playErrorSound();
+      setLogs(prev => [...prev, `✖ IMAGE LOAD FAILURE: ${error?.message || error}`]);
+    } finally {
+      stopProcessLoop();
+      setTimeout(() => {
+        setIsCompiling(false);
+      }, 1000);
+    }
+  };
+
+  // Remove a loaded image
+  const handleRemoveImage = (uuid: string) => {
+    setImageFiles(prev => {
+      const item = prev.find(img => img.uuid === uuid);
+      if (item) {
+        URL.revokeObjectURL(item.previewUrl);
+        if (item.compressedPreviewUrl) {
+          URL.revokeObjectURL(item.compressedPreviewUrl);
+        }
+      }
+      return prev.filter(img => img.uuid !== uuid);
+    });
+  };
+
+  // Clear all images from memory
+  const handleClearAllImages = () => {
+    imageFiles.forEach(item => {
+      URL.revokeObjectURL(item.previewUrl);
+      if (item.compressedPreviewUrl) {
+        URL.revokeObjectURL(item.compressedPreviewUrl);
+      }
+    });
+    setImageFiles([]);
+  };
+
+  // Compress all image files
+  const handleCompressAllImages = async (settings: CompressionSettings) => {
+    setImageSettings(settings);
+    setIsCompiling(true);
+    setCompileTitle('COMPRESSING IMAGE MATRIX');
+    setLogs([
+      '> Initializing hardware compression cores...',
+      `> Target Format: ${settings.format.toUpperCase()}`,
+      `> Target Size Limit: ${settings.targetSizeKb ? settings.targetSizeKb + ' KB' : 'None (Best Quality)'}`,
+      `> Dimension Limit: ${settings.maxWidth} x ${settings.maxHeight}`
+    ]);
+    playProcessLoop();
+
+    try {
+      const updatedList = [...imageFiles];
+
+      for (let i = 0; i < updatedList.length; i++) {
+        const item = updatedList[i];
+        setLogs(prev => [...prev, `> Compressing file [${i + 1}/${updatedList.length}]: ${item.name}...`]);
+
+        updatedList[i] = { ...item, compressionStatus: 'compressing' };
+        setImageFiles([...updatedList]);
+
+        try {
+          const imgFormat = settings.format === 'pdf' ? 'jpeg' : settings.format;
+          
+          const result = await compressImage(
+            item.file,
+            imgFormat,
+            settings.targetSizeKb,
+            1.0,
+            settings.maxWidth,
+            settings.maxHeight
+          );
+
+          let outputBlob = result.blob;
+
+          if (settings.format === 'pdf') {
+            const pdfBytes = await convertImageToPdf(result.blob, imgFormat);
+            outputBlob = new Blob([pdfBytes as any], { type: 'application/pdf' });
+          }
+
+          if (item.compressedPreviewUrl) {
+            URL.revokeObjectURL(item.compressedPreviewUrl);
+          }
+
+          updatedList[i] = {
+            ...item,
+            compressedBlob: outputBlob,
+            compressedSize: outputBlob.size,
+            compressedWidth: result.width,
+            compressedHeight: result.height,
+            qualityUsed: result.qualityUsed,
+            compressedPreviewUrl: URL.createObjectURL(outputBlob),
+            compressionStatus: 'done'
+          };
+
+          const diff = ((item.originalSize - outputBlob.size) / item.originalSize * 100).toFixed(0);
+          setLogs(prev => [
+            ...prev,
+            `  ✔ Optimized: ${(item.originalSize / 1024).toFixed(1)} KB -> ${(outputBlob.size / 1024).toFixed(1)} KB (-${diff}%)`
+          ]);
+        } catch (e: any) {
+          updatedList[i] = {
+            ...item,
+            compressionStatus: 'error',
+            errorMsg: e?.message || String(e)
+          };
+          setLogs(prev => [...prev, `  ✖ Error compressing: ${e?.message || e}`]);
+        }
+
+        setImageFiles([...updatedList]);
+      }
+
+      setLogs(prev => [...prev, '✔ Batch compression sweep complete. All nodes optimized.']);
+      playCompletionSound();
+    } catch (e: any) {
+      playErrorSound();
+      setLogs(prev => [...prev, `✖ SWEEP ERROR: ${e?.message || e}`]);
+    } finally {
+      stopProcessLoop();
+      setTimeout(() => {
+        setIsCompiling(false);
+      }, 1000);
+    }
+  };
+
+  // Compress a single image file on-demand
+  const handleCompressSingleImage = async (uuid: string) => {
+    const itemIdx = imageFiles.findIndex(img => img.uuid === uuid);
+    if (itemIdx === -1) return;
+
+    const item = imageFiles[itemIdx];
+    const settings = imageSettings;
+
+    setIsCompiling(true);
+    setCompileTitle('OPTIMIZING TARGET IMAGE NODE');
+    setLogs([
+      `> Accessing memory register for ${item.name}...`,
+      `> Target Format: ${settings.format.toUpperCase()}`,
+      `> Target Size Limit: ${settings.targetSizeKb ? settings.targetSizeKb + ' KB' : 'None'}`
+    ]);
+    playProcessLoop();
+
+    try {
+      const updatedList = [...imageFiles];
+      updatedList[itemIdx] = { ...item, compressionStatus: 'compressing' };
+      setImageFiles([...updatedList]);
+
+      const imgFormat = settings.format === 'pdf' ? 'jpeg' : settings.format;
+      
+      const result = await compressImage(
+        item.file,
+        imgFormat,
+        settings.targetSizeKb,
+        1.0,
+        settings.maxWidth,
+        settings.maxHeight
+      );
+
+      let outputBlob = result.blob;
+
+      if (settings.format === 'pdf') {
+        const pdfBytes = await convertImageToPdf(result.blob, imgFormat);
+        outputBlob = new Blob([pdfBytes as any], { type: 'application/pdf' });
+      }
+
+      if (item.compressedPreviewUrl) {
+        URL.revokeObjectURL(item.compressedPreviewUrl);
+      }
+
+      updatedList[itemIdx] = {
+        ...item,
+        compressedBlob: outputBlob,
+        compressedSize: outputBlob.size,
+        compressedWidth: result.width,
+        compressedHeight: result.height,
+        qualityUsed: result.qualityUsed,
+        compressedPreviewUrl: URL.createObjectURL(outputBlob),
+        compressionStatus: 'done'
+      };
+
+      setImageFiles([...updatedList]);
+      const diff = ((item.originalSize - outputBlob.size) / item.originalSize * 100).toFixed(0);
+      setLogs(prev => [
+        ...prev,
+        `✔ Compression complete. Size reduced by ${diff}% (${(outputBlob.size / 1024).toFixed(1)} KB)`
+      ]);
+      playCompletionSound();
+    } catch (e: any) {
+      playErrorSound();
+      const updatedList = [...imageFiles];
+      updatedList[itemIdx] = {
+        ...item,
+        compressionStatus: 'error',
+        errorMsg: e?.message || String(e)
+      };
+      setImageFiles([...updatedList]);
+      setLogs(prev => [...prev, `✖ Single compression failure: ${e?.message || e}`]);
+    } finally {
+      stopProcessLoop();
+      setTimeout(() => {
+        setIsCompiling(false);
+      }, 1000);
+    }
+  };
+
+  // Download a single compressed image
+  const handleDownloadSingleImage = (uuid: string) => {
+    const item = imageFiles.find(img => img.uuid === uuid);
+    if (!item || !item.compressedBlob || item.compressionStatus !== 'done') return;
+
+    const formatExt = imageSettings.format === 'pdf' ? 'pdf' : imageSettings.format === 'jpeg' ? 'jpg' : imageSettings.format;
+    const dotIdx = item.name.lastIndexOf('.');
+    const baseName = dotIdx !== -1 ? item.name.substring(0, dotIdx) : item.name;
+    const downloadName = `${baseName}_optimized.${formatExt}`;
+
+    triggerBlobDownload(item.compressedBlob, downloadName);
+  };
+
+  // Download all compressed images with a staggered delay
+  const handleDownloadAllImages = async () => {
+    const optimized = imageFiles.filter(img => img.compressionStatus === 'done' && img.compressedBlob);
+    if (optimized.length === 0) return;
+
+    setIsCompiling(true);
+    setCompileTitle('DISPATCHING OPTIMIZED FILES');
+    setLogs([`> Dispatching ${optimized.length} optimized nodes to download pipeline...`]);
+    playProcessLoop();
+
+    try {
+      for (let i = 0; i < optimized.length; i++) {
+        const item = optimized[i];
+        setLogs(prev => [...prev, `> Exporting [${i + 1}/${optimized.length}]: ${item.name}...`]);
+        handleDownloadSingleImage(item.uuid);
+        
+        // Wait 350ms to allow browser queue to process download
+        await new Promise(resolve => setTimeout(resolve, 350));
+      }
+      setLogs(prev => [...prev, '✔ Download pipeline dispatch finished successfully.']);
+      playCompletionSound();
+    } catch (e: any) {
+      playErrorSound();
+      setLogs(prev => [...prev, `✖ DOWNLOAD PIPELINE FAIL: ${e?.message || e}`]);
+    } finally {
+      stopProcessLoop();
+      setTimeout(() => {
+        setIsCompiling(false);
+      }, 1000);
+    }
+  };
+
+  // Generic Blob Downloader
+  const triggerBlobDownload = (blob: Blob, name: string) => {
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = name;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(link.href);
+  };
+
+  const activePreviewImage = imageFiles.find(img => img.uuid === previewImageUuid);
+
   return (
     <div className="app-container">
       <Header onHoverSound={triggerHoverSound} />
       
+      {/* Dynamic Mode Switcher Header */}
+      <div className="mode-toggle-bar">
+        <button 
+          className={`mode-toggle-btn-main ${mode === 'pdf' ? 'active' : ''}`}
+          onClick={() => handleModeChange('pdf')}
+          onMouseEnter={triggerHoverSound}
+        >
+          PDF MATRIX SUITE
+        </button>
+        <button 
+          className={`mode-toggle-btn-main ${mode === 'image' ? 'active' : ''}`}
+          onClick={() => handleModeChange('image')}
+          onMouseEnter={triggerHoverSound}
+        >
+          IMAGE COMPRESSOR & PORTAL EXPORT
+        </button>
+      </div>
+
       <div className="dashboard-layout">
-        <ControlPanel
-          files={files}
-          onRemoveFile={handleRemoveFile}
-          onReorderFiles={handleReorderFiles}
-          onMergeTrigger={handleMergeCompile}
-          onSplitTrigger={handleSplitCompile}
-          onSplitEveryPageTrigger={handleSplitEveryPage}
-          onMixTrigger={handleMixPages}
-          onRotateAllTrigger={handleRotateAll}
-          hasPages={pages.length > 0}
-        />
+        {mode === 'pdf' ? (
+          <ControlPanel
+            files={files}
+            onRemoveFile={handleRemoveFile}
+            onReorderFiles={handleReorderFiles}
+            onMergeTrigger={handleMergeCompile}
+            onSplitTrigger={handleSplitCompile}
+            onSplitEveryPageTrigger={handleSplitEveryPage}
+            onMixTrigger={handleMixPages}
+            onRotateAllTrigger={handleRotateAll}
+            hasPages={pages.length > 0}
+          />
+        ) : (
+          <ImageControlPanel
+            hasImages={imageFiles.length > 0}
+            isProcessing={isCompiling}
+            onCompressAll={handleCompressAllImages}
+            onDownloadAll={handleDownloadAllImages}
+            onClearAll={handleClearAllImages}
+            imageCount={imageFiles.length}
+          />
+        )}
         
         <main className="workspace-panel">
           <UploadZone
-            onFilesSelected={handleFilesSelected}
+            mode={mode}
+            onFilesSelected={mode === 'pdf' ? handleFilesSelected : handleImageFilesSelected}
             onHoverSound={triggerHoverSound}
           />
           
-          <PageOrganizer
-            pages={pages}
-            files={files}
-            onReorderPages={handleReorderPages}
-            onRotatePage={handleRotatePage}
-            onDeletePage={handleDeletePage}
-            onPreviewPage={setPreviewPage}
-            onClearAll={handleClearAll}
-            onHoverSound={triggerHoverSound}
-          />
+          {mode === 'pdf' ? (
+            <PageOrganizer
+              pages={pages}
+              files={files}
+              onReorderPages={handleReorderPages}
+              onRotatePage={handleRotatePage}
+              onDeletePage={handleDeletePage}
+              onPreviewPage={setPreviewPage}
+              onClearAll={handleClearAll}
+              onHoverSound={triggerHoverSound}
+            />
+          ) : (
+            <ImageWorkspace
+              images={imageFiles}
+              onRemoveImage={handleRemoveImage}
+              onPreviewImage={setPreviewImageUuid}
+              onCompressSingle={handleCompressSingleImage}
+              onDownloadSingle={handleDownloadSingleImage}
+              onClearAll={handleClearAllImages}
+            />
+          )}
         </main>
       </div>
 
@@ -390,6 +763,22 @@ export const App: React.FC = () => {
           pageInfo={previewPage}
           filesMap={filesMap}
           onClose={() => setPreviewPage(null)}
+        />
+      )}
+
+      {activePreviewImage && (
+        <ImagePreviewModal
+          name={activePreviewImage.name}
+          originalUrl={activePreviewImage.previewUrl}
+          originalSize={activePreviewImage.originalSize}
+          originalWidth={activePreviewImage.originalWidth}
+          originalHeight={activePreviewImage.originalHeight}
+          compressedUrl={activePreviewImage.compressedPreviewUrl}
+          compressedSize={activePreviewImage.compressedSize}
+          compressedWidth={activePreviewImage.compressedWidth}
+          compressedHeight={activePreviewImage.compressedHeight}
+          qualityUsed={activePreviewImage.qualityUsed}
+          onClose={() => setPreviewImageUuid(null)}
         />
       )}
     </div>
