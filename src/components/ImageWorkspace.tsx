@@ -27,6 +27,7 @@ interface ImageWorkspaceProps {
   onCompressSingle: (uuid: string) => void;
   onDownloadSingle: (uuid: string) => void;
   onClearAll: () => void;
+  onRenameImage: (uuid: string, newName: string) => void;
 }
 
 export const ImageWorkspace: React.FC<ImageWorkspaceProps> = ({
@@ -35,8 +36,34 @@ export const ImageWorkspace: React.FC<ImageWorkspaceProps> = ({
   onPreviewImage,
   onCompressSingle,
   onDownloadSingle,
-  onClearAll
+  onClearAll,
+  onRenameImage
 }) => {
+  const [editingUuid, setEditingUuid] = React.useState<string | null>(null);
+  const [tempName, setTempName] = React.useState('');
+
+  const startEditing = (uuid: string, currentName: string) => {
+    playHoverSound();
+    setEditingUuid(uuid);
+    setTempName(currentName);
+  };
+
+  const saveRename = (uuid: string) => {
+    playReorderSound();
+    if (tempName.trim()) {
+      onRenameImage(uuid, tempName.trim());
+    }
+    setEditingUuid(null);
+  };
+
+  const handleKeyPress = (e: React.KeyboardEvent, uuid: string) => {
+    if (e.key === 'Enter') {
+      saveRename(uuid);
+    } else if (e.key === 'Escape') {
+      setEditingUuid(null);
+    }
+  };
+
   const formatSize = (bytes: number) => {
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -78,6 +105,7 @@ export const ImageWorkspace: React.FC<ImageWorkspaceProps> = ({
           const reduction = item.compressedSize 
             ? ((item.originalSize - item.compressedSize) / item.originalSize * 100).toFixed(0)
             : null;
+          const isEditing = editingUuid === item.uuid;
 
           return (
             <div
@@ -98,32 +126,46 @@ export const ImageWorkspace: React.FC<ImageWorkspaceProps> = ({
               )}
 
               {/* Card Header & Status Badge */}
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span 
-                  style={{ fontSize: '0.65rem', fontFamily: 'var(--font-cyber)', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '140px' }}
-                  title={item.name}
-                >
-                  {item.name}
-                </span>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', minHeight: '22px', width: '100%', gap: '6px' }}>
+                {isEditing ? (
+                  <input
+                    type="text"
+                    className="cyber-input"
+                    value={tempName}
+                    onChange={(e) => setTempName(e.target.value)}
+                    onBlur={() => saveRename(item.uuid)}
+                    onKeyDown={(e) => handleKeyPress(e, item.uuid)}
+                    autoFocus
+                    style={{ padding: '1px 6px', fontSize: '0.65rem', height: '22px', flex: 1 }}
+                  />
+                ) : (
+                  <span 
+                    style={{ fontSize: '0.65rem', fontFamily: 'var(--font-cyber)', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '140px', cursor: 'pointer', textDecoration: 'underline dotted rgba(255,255,255,0.15)' }}
+                    title={`${item.name} (Click to rename)`}
+                    onClick={() => startEditing(item.uuid, item.name)}
+                  >
+                    {item.name}
+                  </span>
+                )}
                 
                 {/* Status indicator */}
                 {item.compressionStatus === 'idle' && (
-                  <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', border: '1px solid rgba(255,255,255,0.15)', padding: '1px 5px', borderRadius: '3px' }}>
+                  <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', border: '1px solid rgba(255,255,255,0.15)', padding: '1px 5px', borderRadius: '3px', whiteSpace: 'nowrap' }}>
                     READY
                   </span>
                 )}
                 {item.compressionStatus === 'compressing' && (
-                  <span style={{ fontSize: '0.6rem', color: 'var(--accent-cyan)', border: '1px solid var(--accent-cyan)', padding: '1px 5px', borderRadius: '3px', animation: 'pulseGlow 1s infinite' }}>
+                  <span style={{ fontSize: '0.6rem', color: 'var(--accent-cyan)', border: '1px solid var(--accent-cyan)', padding: '1px 5px', borderRadius: '3px', animation: 'pulseGlow 1s infinite', whiteSpace: 'nowrap' }}>
                     OPTIMIZING
                   </span>
                 )}
                 {item.compressionStatus === 'done' && (
-                  <span style={{ fontSize: '0.6rem', color: '#00ff9d', border: '1px solid #00ff9d', background: 'rgba(0, 255, 157, 0.05)', padding: '1px 5px', borderRadius: '3px', fontWeight: 'bold' }}>
+                  <span style={{ fontSize: '0.6rem', color: '#00ff9d', border: '1px solid #00ff9d', background: 'rgba(0, 255, 157, 0.05)', padding: '1px 5px', borderRadius: '3px', fontWeight: 'bold', whiteSpace: 'nowrap' }}>
                     OPTIMIZED
                   </span>
                 )}
                 {item.compressionStatus === 'error' && (
-                  <span style={{ fontSize: '0.6rem', color: '#ff3e3e', border: '1px solid #ff3e3e', padding: '1px 5px', borderRadius: '3px' }}>
+                  <span style={{ fontSize: '0.6rem', color: '#ff3e3e', border: '1px solid #ff3e3e', padding: '1px 5px', borderRadius: '3px', whiteSpace: 'nowrap' }}>
                     FAILED
                   </span>
                 )}

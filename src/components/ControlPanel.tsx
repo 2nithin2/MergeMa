@@ -18,6 +18,7 @@ interface ControlPanelProps {
   onMixTrigger: (fileAUuid: string, fileBUuid: string) => void;
   onRotateAllTrigger: (angle: 90 | -90) => void;
   hasPages: boolean;
+  onRenameFile: (uuid: string, newName: string) => void;
 }
 
 export const ControlPanel: React.FC<ControlPanelProps> = ({
@@ -29,9 +30,36 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   onSplitEveryPageTrigger,
   onMixTrigger,
   onRotateAllTrigger,
-  hasPages
+  hasPages,
+  onRenameFile
 }) => {
   const [activeTab, setActiveTab] = useState<'merge' | 'split' | 'mix'>('merge');
+  
+  // Renaming state
+  const [editingUuid, setEditingUuid] = useState<string | null>(null);
+  const [tempName, setTempName] = useState('');
+
+  const startEditing = (uuid: string, currentName: string) => {
+    playHoverSound();
+    setEditingUuid(uuid);
+    setTempName(currentName);
+  };
+
+  const saveRename = (uuid: string) => {
+    playReorderSound();
+    if (tempName.trim()) {
+      onRenameFile(uuid, tempName.trim());
+    }
+    setEditingUuid(null);
+  };
+
+  const handleKeyPress = (e: React.KeyboardEvent, uuid: string) => {
+    if (e.key === 'Enter') {
+      saveRename(uuid);
+    } else if (e.key === 'Escape') {
+      setEditingUuid(null);
+    }
+  };
   
   // Tab states
   const [outputFilename, setOutputFilename] = useState('mergema_compiled');
@@ -290,46 +318,67 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
           </div>
         ) : (
           <div className="file-list">
-            {files.map((file, index) => (
-              <div key={file.uuid} className="file-item">
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', maxWidth: '160px' }}>
-                  <div className="file-name-text" title={file.name} style={{ fontFamily: 'var(--font-cyber)', fontSize: '0.65rem' }}>
-                    {index + 1}. {file.name}
+            {files.map((file, index) => {
+              const isEditing = editingUuid === file.uuid;
+              return (
+                <div key={file.uuid} className="file-item" style={{ gap: '6px' }}>
+                  {isEditing ? (
+                    <input
+                      type="text"
+                      className="cyber-input"
+                      value={tempName}
+                      onChange={(e) => setTempName(e.target.value)}
+                      onBlur={() => saveRename(file.uuid)}
+                      onKeyDown={(e) => handleKeyPress(e, file.uuid)}
+                      autoFocus
+                      style={{ padding: '2px 6px', fontSize: '0.65rem', height: '24px', flex: 1 }}
+                    />
+                  ) : (
+                    <div 
+                      style={{ display: 'flex', flexDirection: 'column', gap: '2px', maxWidth: '160px', flex: 1, cursor: 'pointer' }}
+                      onClick={() => startEditing(file.uuid, file.name)}
+                      title="Click to rename file"
+                    >
+                      <div className="file-name-text" title={`${file.name} (Click to rename)`} style={{ fontFamily: 'var(--font-cyber)', fontSize: '0.65rem', textDecoration: 'underline dotted rgba(255,255,255,0.15)' }}>
+                        {index + 1}. {file.name}
+                      </div>
+                      <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)' }}>
+                        Pages: {file.pageCount}
+                      </span>
+                    </div>
+                  )}
+                  <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                    <button
+                      className="delete-file-btn"
+                      onClick={() => moveFile(index, 'up')}
+                      disabled={index === 0 || isEditing}
+                      style={{ opacity: (index === 0 || isEditing) ? 0.35 : 1, padding: '2px' }}
+                      title="Move File Up"
+                    >
+                      <ArrowUp size={11} />
+                    </button>
+                    <button
+                      className="delete-file-btn"
+                      onClick={() => moveFile(index, 'down')}
+                      disabled={index === files.length - 1 || isEditing}
+                      style={{ opacity: (index === files.length - 1 || isEditing) ? 0.35 : 1, padding: '2px' }}
+                      title="Move File Down"
+                    >
+                      <ArrowDown size={11} />
+                    </button>
+                    <button
+                      className="delete-file-btn"
+                      onClick={() => { playReorderSound(); onRemoveFile(file.uuid); }}
+                      style={{ padding: '2px' }}
+                      disabled={isEditing}
+                      title="Remove file & pages"
+                    >
+                      <Trash2 size={11} style={{ color: 'rgba(255, 62, 62, 0.7)' }} />
+                    </button>
                   </div>
-                  <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)' }}>
-                    Pages: {file.pageCount}
-                  </span>
                 </div>
-                <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
-                  <button
-                    className="delete-file-btn"
-                    onClick={() => moveFile(index, 'up')}
-                    disabled={index === 0}
-                    style={{ opacity: index === 0 ? 0.35 : 1, padding: '2px' }}
-                    title="Move File Up"
-                  >
-                    <ArrowUp size={11} />
-                  </button>
-                  <button
-                    className="delete-file-btn"
-                    onClick={() => moveFile(index, 'down')}
-                    disabled={index === files.length - 1}
-                    style={{ opacity: index === files.length - 1 ? 0.35 : 1, padding: '2px' }}
-                    title="Move File Down"
-                  >
-                    <ArrowDown size={11} />
-                  </button>
-                  <button
-                    className="delete-file-btn"
-                    onClick={() => { playReorderSound(); onRemoveFile(file.uuid); }}
-                    style={{ padding: '2px' }}
-                    title="Remove file & pages"
-                  >
-                    <Trash2 size={11} style={{ color: 'rgba(255, 62, 62, 0.7)' }} />
-                  </button>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

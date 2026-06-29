@@ -125,3 +125,59 @@ export async function compilePdf(
   const compiledBytes = await newPdf.save();
   return compiledBytes;
 }
+
+/**
+ * Renders a specific page of a PDF file to an image blob with high resolution/clarity.
+ */
+export async function renderPdfPageToImage(
+  arrayBuffer: ArrayBuffer,
+  pageIndex: number, // 0-indexed
+  scale: number,
+  format: 'png' | 'jpeg' | 'webp',
+  quality = 0.95
+): Promise<{ blob: Blob; width: number; height: number }> {
+  // Load PDF document using PDF.js
+  const loadingTask = pdfjs.getDocument({ data: new Uint8Array(arrayBuffer) });
+  const pdfDoc = await loadingTask.promise;
+  
+  // pdf-js uses 1-indexed pages
+  const page = await pdfDoc.getPage(pageIndex + 1);
+  
+  const viewport = page.getViewport({ scale });
+  
+  const canvas = document.createElement('canvas');
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+  
+  const context = canvas.getContext('2d');
+  if (!context) {
+    throw new Error("Failed to create canvas 2d context for high resolution rendering");
+  }
+  
+  // Fill canvas with white background (especially for transparent PDFs outputting to JPEG)
+  context.fillStyle = '#FFFFFF';
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  
+  const renderContext = {
+    canvasContext: context,
+    viewport: viewport,
+    canvas: canvas,
+  };
+  
+  await page.render(renderContext).promise;
+  
+  const mimeType = format === 'jpeg' ? 'image/jpeg' : format === 'webp' ? 'image/webp' : 'image/png';
+  
+  const blob: Blob = await new Promise((resolve, reject) => {
+    canvas.toBlob((res) => {
+      if (res) resolve(res);
+      else reject(new Error("Canvas toBlob conversion failed"));
+    }, mimeType, format !== 'png' ? quality : undefined);
+  });
+  
+  return {
+    blob,
+    width: canvas.width,
+    height: canvas.height
+  };
+}

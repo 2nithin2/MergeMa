@@ -14,6 +14,11 @@ import ImageWorkspace, { ImageFileItem } from './components/ImageWorkspace';
 import ImagePreviewModal from './components/ImagePreviewModal';
 import { compressImage, convertImageToPdf } from './utils/imageCompressor';
 
+// PDF to Image Converter components and utilities
+import PdfToImageControlPanel, { PdfToImageSettings } from './components/PdfToImageControlPanel';
+import PdfToImageWorkspace, { ConvertedPageResult } from './components/PdfToImageWorkspace';
+import { renderPdfPageToImage } from './utils/pdfEngine';
+
 interface LoadedFile {
   uuid: string;
   name: string;
@@ -21,8 +26,8 @@ interface LoadedFile {
 }
 
 export const App: React.FC = () => {
-  // App mode: PDF processing or Image Compressor
-  const [mode, setMode] = useState<'pdf' | 'image'>('pdf');
+  // App mode: PDF processing, Image Compressor, or PDF to Image
+  const [mode, setMode] = useState<'pdf' | 'image' | 'pdf-to-image'>('pdf');
 
   // PDF state
   const [filesMap] = useState<Map<string, ArrayBuffer>>(() => new Map());
@@ -39,6 +44,19 @@ export const App: React.FC = () => {
     maxHeight: 2048
   });
 
+  // PDF to Image state
+  const [pdfToImageFile, setPdfToImageFile] = useState<File | null>(null);
+  const [pdfToImageBuffer, setPdfToImageBuffer] = useState<ArrayBuffer | null>(null);
+  const [pdfToImagePages, setPdfToImagePages] = useState<PdfPageInfo[]>([]);
+  const [pdfToImageSelectedPages, setPdfToImageSelectedPages] = useState<Set<number>>(new Set());
+  const [pdfToImageResults, setPdfToImageResults] = useState<Map<number, ConvertedPageResult>>(new Map());
+  const [pdfToImageSettings, setPdfToImageSettings] = useState<PdfToImageSettings>({
+    format: 'png',
+    scale: 2.0,
+    quality: 0.95,
+    filenameBase: ''
+  });
+
   // Compiler modal and logs state
   const [isCompiling, setIsCompiling] = useState(false);
   const [compileTitle, setCompileTitle] = useState('COMPILING SYSTEM MATRIX');
@@ -52,7 +70,7 @@ export const App: React.FC = () => {
     playHoverSound();
   };
 
-  const handleModeChange = (newMode: 'pdf' | 'image') => {
+  const handleModeChange = (newMode: 'pdf' | 'image' | 'pdf-to-image') => {
     playReorderSound();
     setMode(newMode);
   };
@@ -373,6 +391,245 @@ export const App: React.FC = () => {
   };
 
   // ==========================================
+  // FILE AND IMAGE RENAMING HANDLERS
+  // ==========================================
+
+  const handleRenameFile = (uuid: string, newName: string) => {
+    setFiles(prev => prev.map(f => f.uuid === uuid ? { ...f, name: newName } : f));
+    setPages(prev => prev.map(p => p.originalFileUuid === uuid ? { ...p, originalFileName: newName } : p));
+  };
+
+  const handleRenameImage = (uuid: string, newName: string) => {
+    setImageFiles(prev => prev.map(img => img.uuid === uuid ? { ...img, name: newName } : img));
+  };
+
+  const handleRenamePdfToImageFile = (newName: string) => {
+    if (pdfToImageFile) {
+      const defaultBase = newName.replace(/\.[^/.]+$/, "");
+      setPdfToImageSettings(prev => ({
+        ...prev,
+        filenameBase: defaultBase
+      }));
+      const renamedFile = new File([pdfToImageFile], newName, { type: pdfToImageFile.type });
+      setPdfToImageFile(renamedFile);
+    }
+  };
+
+  // ==========================================
+  // PDF TO IMAGE CONVERTER HANDLERS
+  // ==========================================
+
+  const handlePdfToImageFileSelected = async (newFiles: File[]) => {
+    if (newFiles.length === 0) return;
+    const file = newFiles[0]; // Process only one PDF at a time
+
+    setIsCompiling(true);
+    setCompileTitle('ANALYZING SOURCE PDF MATRIX');
+    setLogs(['> Initiating secure PDF memory injection...', `> Loading file: ${file.name}...`]);
+    playProcessLoop();
+
+    try {
+      const buffer = await file.arrayBuffer();
+      setPdfToImageFile(file);
+      setPdfToImageBuffer(buffer);
+      
+      const fileUuid = `pdf-src-${Math.random().toString(36).substr(2, 9)}`;
+      const extractedPages = await extractPagesAsThumbnails(file, fileUuid, (statusText) => {
+        setLogs(prev => [...prev, statusText]);
+      });
+
+      setPdfToImagePages(extractedPages);
+      
+      // Auto-select all pages by default
+      const allPagesSet = new Set<number>();
+      for (let i = 0; i < extractedPages.length; i++) {
+        allPagesSet.add(i);
+      }
+      setPdfToImageSelectedPages(allPagesSet);
+      
+      // Initialize results map
+      const initialResults = new Map<number, ConvertedPageResult>();
+      for (let i = 0; i < extractedPages.length; i++) {
+        initialResults.set(i, { status: 'idle' });
+      }
+      setPdfToImageResults(initialResults);
+
+      const defaultBase = file.name.replace(/\.[^/.]+$/, "");
+      setPdfToImageSettings(prev => ({
+        ...prev,
+        filenameBase: defaultBase
+      }));
+
+      setLogs(prev => [...prev, `✔ PDF parsing complete. Extracted ${extractedPages.length} pages visual maps.`]);
+      playCompletionSound();
+    } catch (error: any) {
+      playErrorSound();
+      setLogs(prev => [...prev, `✖ CRITICAL FAILURE: ${error?.message || error}`]);
+    } finally {
+      stopProcessLoop();
+      // Brief timeout to let the user see the success log before closing
+      setTimeout(() => {
+        setIsCompiling(false);
+      }, 1000);
+    }
+  };
+
+  const handleTogglePdfToImagePage = (pageIndex: number) => {
+    setPdfToImageSelectedPages(prev => {
+      const copy = new Set(prev);
+      if (copy.has(pageIndex)) {
+        copy.delete(pageIndex);
+      } else {
+        copy.add(pageIndex);
+      }
+      return copy;
+    });
+  };
+
+  const handleToggleAllPdfToImagePages = (selectAll: boolean) => {
+    if (selectAll) {
+      const all = new Set<number>();
+      for (let i = 0; i < pdfToImagePages.length; i++) {
+        all.add(i);
+      }
+      setPdfToImageSelectedPages(all);
+    } else {
+      setPdfToImageSelectedPages(new Set());
+    }
+  };
+
+  const handleConvertPdfToImages = async () => {
+    if (!pdfToImageFile || !pdfToImageBuffer || pdfToImageSelectedPages.size === 0) return;
+
+    setIsCompiling(true);
+    setCompileTitle('CONVERTING PAGES TO HIGH RES IMAGES');
+    setLogs([
+      '> Initializing high-precision document renderer...',
+      `> Target Format: ${pdfToImageSettings.format.toUpperCase()}`,
+      `> Clarity Scale: ${pdfToImageSettings.scale.toFixed(1)}x DPI`,
+      `> Quality Target: ${Math.round(pdfToImageSettings.quality * 100)}%`,
+      `> Total Pages to Render: ${pdfToImageSelectedPages.size}`
+    ]);
+    playProcessLoop();
+
+    const selectedList = Array.from(pdfToImageSelectedPages).sort((a, b) => a - b);
+    const updatedResults = new Map(pdfToImageResults);
+
+    try {
+      for (const pageIdx of selectedList) {
+        setLogs(prev => [...prev, `> Rendering page ${pageIdx + 1} to ${pdfToImageSettings.format.toUpperCase()}...`]);
+        
+        updatedResults.set(pageIdx, { status: 'converting' });
+        setPdfToImageResults(new Map(updatedResults));
+
+        try {
+          const result = await renderPdfPageToImage(
+            pdfToImageBuffer,
+            pageIdx,
+            pdfToImageSettings.scale,
+            pdfToImageSettings.format,
+            pdfToImageSettings.quality
+          );
+
+          // Revoke old preview URL if exists
+          const oldResult = pdfToImageResults.get(pageIdx);
+          if (oldResult?.previewUrl) {
+            URL.revokeObjectURL(oldResult.previewUrl);
+          }
+
+          updatedResults.set(pageIdx, {
+            status: 'done',
+            blob: result.blob,
+            sizeBytes: result.blob.size,
+            width: result.width,
+            height: result.height,
+            previewUrl: URL.createObjectURL(result.blob)
+          });
+        } catch (e: any) {
+          updatedResults.set(pageIdx, {
+            status: 'error',
+            errorMsg: e?.message || String(e)
+          });
+          setLogs(prev => [...prev, `  ✖ Render error on page ${pageIdx + 1}: ${e?.message || e}`]);
+        }
+
+        setPdfToImageResults(new Map(updatedResults));
+      }
+
+      const successCount = selectedList.filter(idx => updatedResults.get(idx)?.status === 'done').length;
+      setLogs(prev => [...prev, `✔ Page extraction sweep finished. Converted ${successCount}/${selectedList.length} pages.`]);
+      playCompletionSound();
+    } catch (e: any) {
+      playErrorSound();
+      setLogs(prev => [...prev, `✖ SWEEP ERROR: ${e?.message || e}`]);
+    } finally {
+      stopProcessLoop();
+      setTimeout(() => {
+        setIsCompiling(false);
+      }, 1000);
+    }
+  };
+
+  const handleDownloadSinglePdfToImage = (pageIndex: number) => {
+    const result = pdfToImageResults.get(pageIndex);
+    if (!result || !result.blob || result.status !== 'done') return;
+
+    const baseName = pdfToImageSettings.filenameBase.trim() || (pdfToImageFile ? pdfToImageFile.name.replace(/\.[^/.]+$/, "") : "document");
+    const extension = pdfToImageSettings.format;
+    const downloadName = `${baseName}_page_${pageIndex + 1}.${extension}`;
+
+    triggerBlobDownload(result.blob, downloadName);
+  };
+
+  const handleDownloadAllPdfToImages = async () => {
+    const activeResults = Array.from(pdfToImageResults.entries())
+      .filter(([_, res]) => res.status === 'done' && res.blob)
+      .sort((a, b) => a[0] - b[0]);
+
+    if (activeResults.length === 0) return;
+
+    setIsCompiling(true);
+    setCompileTitle('DISPATCHING CONVERTED IMAGES');
+    setLogs([`> Dispatching ${activeResults.length} extracted images to download pipeline...`]);
+    playProcessLoop();
+
+    try {
+      for (let i = 0; i < activeResults.length; i++) {
+        const [pageIdx] = activeResults[i];
+        setLogs(prev => [...prev, `> Exporting page ${pageIdx + 1}...`]);
+        handleDownloadSinglePdfToImage(pageIdx);
+        
+        // Wait 350ms to allow browser queue to process download
+        await new Promise(resolve => setTimeout(resolve, 350));
+      }
+      setLogs(prev => [...prev, '✔ Download pipeline dispatch finished successfully.']);
+      playCompletionSound();
+    } catch (e: any) {
+      playErrorSound();
+      setLogs(prev => [...prev, `✖ DOWNLOAD PIPELINE FAIL: ${e?.message || e}`]);
+    } finally {
+      stopProcessLoop();
+      setTimeout(() => {
+        setIsCompiling(false);
+      }, 1000);
+    }
+  };
+
+  const handleClearAllPdfToImages = () => {
+    // Revoke all preview URLs
+    pdfToImageResults.forEach((res) => {
+      if (res.previewUrl) {
+        URL.revokeObjectURL(res.previewUrl);
+      }
+    });
+
+    setPdfToImageFile(null);
+    setPdfToImageBuffer(null);
+    setPdfToImagePages([]);
+    setPdfToImageSelectedPages(new Set());
+    setPdfToImageResults(new Map());
+  };
+  // ==========================================
   // IMAGE COMPRESSOR HANDLERS
   // ==========================================
 
@@ -677,6 +934,9 @@ export const App: React.FC = () => {
 
   return (
     <div className="app-container">
+      <div className="glass-shape glass-shape-purple-torus" />
+      <div className="glass-shape glass-shape-pink-sphere" />
+      <div className="glass-shape glass-shape-cyan-pill" />
       <Header onHoverSound={triggerHoverSound} />
       
       {/* Dynamic Mode Switcher Header */}
@@ -687,6 +947,13 @@ export const App: React.FC = () => {
           onMouseEnter={triggerHoverSound}
         >
           PDF MATRIX SUITE
+        </button>
+        <button 
+          className={`mode-toggle-btn-main ${mode === 'pdf-to-image' ? 'active' : ''}`}
+          onClick={() => handleModeChange('pdf-to-image')}
+          onMouseEnter={triggerHoverSound}
+        >
+          PDF TO IMAGE CONVERTER
         </button>
         <button 
           className={`mode-toggle-btn-main ${mode === 'image' ? 'active' : ''}`}
@@ -709,6 +976,19 @@ export const App: React.FC = () => {
             onMixTrigger={handleMixPages}
             onRotateAllTrigger={handleRotateAll}
             hasPages={pages.length > 0}
+            onRenameFile={handleRenameFile}
+          />
+        ) : mode === 'pdf-to-image' ? (
+          <PdfToImageControlPanel
+            hasDocument={!!pdfToImageFile}
+            isProcessing={isCompiling}
+            settings={pdfToImageSettings}
+            onSettingsChange={setPdfToImageSettings}
+            onConvert={handleConvertPdfToImages}
+            onDownloadAll={handleDownloadAllPdfToImages}
+            onClearAll={handleClearAllPdfToImages}
+            selectedPagesCount={pdfToImageSelectedPages.size}
+            totalConvertedCount={Array.from(pdfToImageResults.values()).filter(r => r.status === 'done').length}
           />
         ) : (
           <ImageControlPanel
@@ -724,7 +1004,13 @@ export const App: React.FC = () => {
         <main className="workspace-panel">
           <UploadZone
             mode={mode}
-            onFilesSelected={mode === 'pdf' ? handleFilesSelected : handleImageFilesSelected}
+            onFilesSelected={
+              mode === 'pdf' 
+                ? handleFilesSelected 
+                : mode === 'pdf-to-image'
+                ? handlePdfToImageFileSelected
+                : handleImageFilesSelected
+            }
             onHoverSound={triggerHoverSound}
           />
           
@@ -739,6 +1025,19 @@ export const App: React.FC = () => {
               onClearAll={handleClearAll}
               onHoverSound={triggerHoverSound}
             />
+          ) : mode === 'pdf-to-image' ? (
+            <PdfToImageWorkspace
+              pages={pdfToImagePages}
+              documentName={pdfToImageFile ? pdfToImageFile.name : ''}
+              selectedPages={pdfToImageSelectedPages}
+              onTogglePage={handleTogglePdfToImagePage}
+              onToggleAll={handleToggleAllPdfToImagePages}
+              results={pdfToImageResults}
+              onDownloadSingle={handleDownloadSinglePdfToImage}
+              onClearAll={handleClearAllPdfToImages}
+              outputFormat={pdfToImageSettings.format}
+              onRenameDocument={handleRenamePdfToImageFile}
+            />
           ) : (
             <ImageWorkspace
               images={imageFiles}
@@ -747,6 +1046,7 @@ export const App: React.FC = () => {
               onCompressSingle={handleCompressSingleImage}
               onDownloadSingle={handleDownloadSingleImage}
               onClearAll={handleClearAllImages}
+              onRenameImage={handleRenameImage}
             />
           )}
         </main>
